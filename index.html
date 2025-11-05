@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bus Location Sender</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; background:#f5f7fa; color:#111; }
+    header { background:#0078ff; color:#fff; padding:10px 16px; font-size:1.1rem; font-weight:600; }
+    main { padding:14px; max-width:780px; margin:0 auto; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+    label { font-weight:600; margin-top:10px; display:block; }
+    input, select, button {
+      width:100%; font-size:1rem; padding:8px 10px; border-radius:8px; border:1px solid #c9d3e0; box-sizing:border-box; margin-top:6px; background:#fff;
+    }
+    button { background:#0078ff; color:#fff; border:none; cursor:pointer; }
+    button.secondary { background:#eef3f8; color:#111; border:1px solid #c9d3e0; }
+    button:hover { filter:brightness(0.95); }
+    input:disabled, select:disabled, button:disabled { opacity:.6; pointer-events:none; }
+    #map { height:320px; border-radius:10px; margin-top:14px; }
+    .status { margin-top:10px; font-size:0.95rem; }
+    .ok { color:#137333; } .err { color:#b3261e; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    .hint { font-size:.9rem; opacity:.8; }
+
+    /* Floating tracking banner */
+    .tracking-banner {
+      position:fixed; left:50%; bottom:16px; transform:translateX(-50%);
+      background:#111; color:#fff; padding:10px 14px; border-radius:999px;
+      box-shadow:0 8px 24px rgba(0,0,0,.25);
+      display:none; z-index:9999; font-size:.95rem;
+    }
+    .tracking-dot {
+      display:inline-block; width:10px; height:10px; border-radius:50%; background:#22c55e; margin-right:8px;
+      box-shadow:0 0 0 0 rgba(34,197,94,.7); animation:pulse 1.5s infinite; vertical-align:middle;
+    }
+    @keyframes pulse {
+      0% { box-shadow:0 0 0 0 rgba(34,197,94,.7); }
+      70% { box-shadow:0 0 0 12px rgba(34,197,94,0); }
+      100% { box-shadow:0 0 0 0 rgba(34,197,94,0); }
+    }
+  </style>
+</head>
+<body>
+  <header>🚌 Bus Location Sender</header>
+  <main>
+    <div class="row">
+      <div>
+        <label for="busId">Bus ID</label>
+        <input type="text" id="busId" placeholder="e.g. 201, 206, 305" />
+      </div>
+      <div>
+        <label for="driver">Driver Name</label>
+        <input type="text" id="driver" placeholder="e.g. Najmi" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="destination">Destination</label>
+        <input type="text" id="destination" placeholder="e.g. Kuantan" />
+      </div>
+      <div>
+        <label for="eta">ETA (optional)</label>
+        <input type="text" id="eta" placeholder="e.g. 10:45 AM" />
+      </div>
+    </div>
+
+    <div class="row-3">
+      <div>
+        <label for="speed">Speed (m/s)</label>
+        <input type="number" id="speed" step="0.1" placeholder="optional (0 if unknown)" />
+      </div>
+      <div>
+        <label for="interval">Auto interval (sec)</label>
+        <select id="interval">
+          <option value="3">3</option>
+          <option value="5" selected>5</option>
+          <option value="10">10</option>
+          <option value="15">15</option>
+        </select>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <label class="hint"><input type="checkbox" id="remember" checked /> Remember these fields</label>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button id="btnSend">📤 Send Current Location</button>
+      <button id="btnAuto" class="secondary">▶️ Start Auto Update</button>
+      <button id="btnClear" class="secondary">🧹 Clear Saved Fields</button>
+    </div>
+
+    <div id="map"></div>
+    <div class="status" id="status"></div>
+    <p class="hint" id="hint">Loading configuration…</p>
+  </main>
+
+  <!-- Floating tracking banner -->
+  <div id="trackingBanner" class="tracking-banner" role="status" aria-live="polite">
+    <span class="tracking-dot"></span> Tracking Active — fields locked
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // ===== CONFIG =====
+    const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyuInv2pTegro2wfqdMOHX1-dUKq2SY98QpP-Cm5iqFEPmHPd8kHnYv0deGQknViQSM/exec";
+    const TRAIL_MAX_POINTS = 1000; // keep last N trail points in the preview map
+
+    // ===== DOM refs =====
+    const busIdEl = document.getElementById('busId');
+    const driverEl = document.getElementById('driver');
+    const destEl = document.getElementById('destination');
+    const etaEl = document.getElementById('eta');
+    const speedEl = document.getElementById('speed');
+    const intervalEl = document.getElementById('interval');
+    const rememberEl = document.getElementById('remember');
+    const statusDiv = document.getElementById('status');
+    const btnSend = document.getElementById('btnSend');
+    const btnAuto = document.getElementById('btnAuto');
+    const btnClear = document.getElementById('btnClear');
+    const hintEl = document.getElementById('hint');
+    const banner = document.getElementById('trackingBanner');
+
+    const allInputs = [busIdEl, driverEl, destEl, etaEl, speedEl, intervalEl, rememberEl];
+    const allButtonsToLock = [btnSend, btnClear]; // Auto toggle stays enabled
+
+    // ===== Status helper =====
+    function show(msg, ok=true){
+      statusDiv.textContent = msg;
+      statusDiv.className = ok ? 'status ok' : 'status err';
+    }
+
+    // ===== LocalStorage (save/restore) =====
+    const LS_KEY = 'bus_sender_fields';
+    const LS_REMEMBER_KEY = 'bus_sender_remember';
+
+    function saveFields(){
+      const remember = rememberEl.checked;
+      localStorage.setItem(LS_REMEMBER_KEY, remember ? '1' : '0');
+      if(!remember) return;
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        busId: busIdEl.value.trim(),
+        driver: driverEl.value.trim(),
+        dest: destEl.value.trim(),
+        eta: etaEl.value.trim(),
+        speed: speedEl.value,
+        interval: intervalEl.value
+      }));
+    }
+    function loadFields(){
+      rememberEl.checked = localStorage.getItem(LS_REMEMBER_KEY) === '1';
+      try{
+        const d = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        if(d.busId) busIdEl.value = d.busId;
+        if(d.driver) driverEl.value = d.driver;
+        if(d.dest) destEl.value = d.dest;
+        if(d.eta) etaEl.value = d.eta;
+        if(d.speed) speedEl.value = d.speed;
+        if(d.interval) intervalEl.value = d.interval;
+      }catch{}
+    }
+    // auto-save on change
+    [busIdEl, driverEl, destEl, etaEl, speedEl, intervalEl].forEach(el=>{
+      el.addEventListener('input', saveFields);
+      el.addEventListener('change', saveFields);
+    });
+    rememberEl.addEventListener('change', () => {
+      saveFields();
+      show(rememberEl.checked ? '💾 Remember is ON — fields saved automatically' :
+                                '🧹 Remember is OFF — fields won’t be saved');
+    });
+    btnClear.onclick = () => {
+      localStorage.removeItem(LS_KEY);
+      localStorage.removeItem(LS_REMEMBER_KEY);
+      show('✅ Saved fields cleared');
+    };
+
+    // ===== Map & local trail =====
+    const map = L.map('map').setView([3.54,103.43],14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:false }).addTo(map);
+    const marker = L.marker([3.54,103.43]).addTo(map).bindPopup('Locating…');
+
+    let trailPoints = [];
+    const trail = L.polyline(trailPoints, { color:'#0066ff', weight:5, opacity:0.75 }).addTo(map);
+
+    function addToTrail(lat, lng){
+      trailPoints.push([lat, lng]);
+      if (trailPoints.length > TRAIL_MAX_POINTS) {
+        trailPoints.splice(0, trailPoints.length - TRAIL_MAX_POINTS);
+      }
+      trail.setLatLngs(trailPoints);
+    }
+
+    // ===== Networking =====
+    async function postUpdate(lat,lng){
+      const payload = {
+        busId: busIdEl.value.trim(),
+        timestamp: new Date().toISOString(),
+        lat, lng,
+        destination: destEl.value.trim(),
+        driver: driverEl.value.trim(),
+        eta: etaEl.value.trim(),
+        speed_mps: Number(speedEl.value || 0)
+      };
+      if(!payload.busId) return show('❌ Enter Bus ID', false);
+      if(!payload.driver) return show('❌ Enter Driver Name', false);
+
+      try{
+        const res = await fetch(WEB_APP_URL, {
+          method:'POST',
+          headers:{ 'Content-Type':'text/plain' }, // avoid preflight for Apps Script
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if(data.ok){
+          show(`✅ Sent ${payload.busId} @ ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+          saveFields();
+        } else {
+          show('❌ Error: ' + (data.error || 'Unknown'), false);
+        }
+      }catch(e){
+        show('❌ Network error: ' + e.message, false);
+      }
+    }
+
+    // ===== Single send =====
+    btnSend.onclick = () => {
+      if(!navigator.geolocation) return show('❌ Geolocation not supported', false);
+      navigator.geolocation.getCurrentPosition(pos=>{
+        const { latitude, longitude } = pos.coords;
+        marker.setLatLng([latitude, longitude]).bindPopup('📍 Current Position').openPopup();
+        map.setView([latitude, longitude], map.getZoom());
+        addToTrail(latitude, longitude); // add to local preview trail
+        postUpdate(latitude, longitude);
+      }, err=>show('❌ GPS error: ' + err.message, false), { enableHighAccuracy:true });
+    };
+
+    // ===== Auto update (watchPosition) =====
+    let watchId = null;
+    let lastSentAt = 0;
+
+    function setLockedState(locked){
+      allInputs.forEach(el => el.disabled = locked);
+      allButtonsToLock.forEach(el => el.disabled = locked);
+      banner.style.display = locked ? 'block' : 'none';
+    }
+
+    btnAuto.onclick = () => {
+      const running = !!watchId;
+      if(running){
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        setLockedState(false);
+        btnAuto.textContent = '▶️ Start Auto Update';
+        show('⏸️ Auto update stopped');
+        return;
+      }
+      if(!navigator.geolocation) return show('❌ Geolocation not supported', false);
+
+      const minGapMs = Number(intervalEl.value) * 1000;
+      setLockedState(true);
+      watchId = navigator.geolocation.watchPosition(pos=>{
+        const { latitude, longitude } = pos.coords;
+        marker.setLatLng([latitude, longitude]).bindPopup('📍 Current').openPopup();
+        map.setView([latitude, longitude]);
+
+        // always add trail locally
+        addToTrail(latitude, longitude);
+
+        const now = Date.now();
+        if(now - lastSentAt >= minGapMs){
+          lastSentAt = now;
+          postUpdate(latitude, longitude);
+        }
+      }, err=>show('❌ ' + err.message, false), { enableHighAccuracy:true, maximumAge:1000 });
+
+      btnAuto.textContent = '🛑 Stop Auto Update';
+      show('▶️ Auto update started');
+    };
+
+    // ===== Load dynamic config (optional) =====
+    async function loadConfig(){
+      try{
+        const res = await fetch(WEB_APP_URL + '?info=1');
+        const js = await res.json();
+        if(js.ok) hintEl.textContent = `Each bus ID is stored in its own sheet (keeps last ${js.maxRows} rows).`;
+        else hintEl.textContent = 'Could not load configuration.';
+      }catch{ hintEl.textContent = 'Could not load configuration.'; }
+    }
+
+    // ===== Wake Lock =====
+    let wakeLock = null;
+    async function requestWakeLock(){
+      try{
+        if('wakeLock' in navigator){
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => console.log('Wake Lock released'));
+          document.addEventListener('visibilitychange', async () => {
+            if(wakeLock !== null && document.visibilityState === 'visible'){
+              try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+            }
+          });
+        }
+      }catch(err){ console.warn('Wake Lock error:', err); }
+    }
+
+    // ===== Boot =====
+    loadFields();
+    loadConfig();
+    requestWakeLock();
+  </script>
+</body>
+</html>
