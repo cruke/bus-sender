@@ -86,6 +86,15 @@
       </div>
     </div>
 
+    <!-- New: Idle seconds control -->
+    <div class="row">
+      <div>
+        <label for="idleSec">Idle (sec) before showing Recenter</label>
+        <input type="number" id="idleSec" min="3" step="1" value="20" />
+      </div>
+      <div></div>
+    </div>
+
     <div class="row-3">
       <div>
         <label for="speed">Speed (m/s)</label>
@@ -107,7 +116,7 @@
     </div>
 
     <div id="map">
-      <!-- Floating recenter button (appears when user pans/zooms) -->
+      <!-- Floating recenter button (appears when user pans/zooms or after idle) -->
       <button id="btnRecenter" class="recenter" title="Recenter">🎯</button>
     </div>
 
@@ -133,6 +142,7 @@
     const driverEl = document.getElementById('driver');
     const destEl   = document.getElementById('destination');
     const intervalEl = document.getElementById('interval');
+    const idleSecEl = document.getElementById('idleSec');
 
     const speedEl = document.getElementById('speed');
     const avgSpeedEl = document.getElementById('avgSpeed');
@@ -151,7 +161,7 @@
     const trail = L.polyline([], { color:'#0078ff', weight:5, opacity:0.75 }).addTo(map);
 
     // Follow/center control
-    let follow = true; // start with auto-centering ON
+    let follow = true; // auto-center ON
     function pauseFollow() {
       follow = false;
       btnRecenter.style.display = 'flex';
@@ -160,10 +170,9 @@
       follow = true;
       btnRecenter.style.display = 'none';
       if (andCenter && lastLat != null && lastLng != null) {
-        map.setView([lastLat, lastLng]); // keep same zoom
+        map.setView([lastLat, lastLng]); // keep current zoom
       }
     }
-
     // Pause auto-centering on manual interactions
     ['dragstart','zoomstart','movestart'].forEach(ev => map.on(ev, pauseFollow));
     btnRecenter.onclick = () => resumeFollow(true);
@@ -174,13 +183,25 @@
     let speedSamples = [];
     let watchId = null, lastSentAt = 0;
 
+    // --------- Idle detection ---------
+    let idleTimer = null;
+    function scheduleIdleReveal() {
+      clearTimeout(idleTimer);
+      const idleMs = Math.max(3000, Number(idleSecEl.value || 20) * 1000);
+      idleTimer = setTimeout(() => {
+        // Show recenter even if user didn't pan, so they can quickly snap back later
+        btnRecenter.style.display = 'flex';
+      }, idleMs);
+    }
+
     // --------- Local Storage ---------
     function saveFields() {
       const data = {
         busId: busIdEl.value.trim(),
         driver: driverEl.value.trim(),
         dest: destEl.value.trim(),
-        interval: intervalEl.value
+        interval: intervalEl.value,
+        idleSec: idleSecEl.value
       };
       localStorage.setItem(LS_KEY, JSON.stringify(data));
     }
@@ -191,13 +212,14 @@
         if (data.driver) driverEl.value = data.driver;
         if (data.dest) destEl.value = data.dest;
         if (data.interval) intervalEl.value = data.interval;
+        if (data.idleSec) idleSecEl.value = data.idleSec;
       } catch (_) {}
     }
     function clearFields() {
       localStorage.removeItem(LS_KEY);
       show('✅ Saved fields cleared');
     }
-    [busIdEl, driverEl, destEl, intervalEl].forEach(el => el.addEventListener('change', saveFields));
+    [busIdEl, driverEl, destEl, intervalEl, idleSecEl].forEach(el => el.addEventListener('change', saveFields));
 
     // --------- UI helpers ---------
     function show(msg, ok = true) {
@@ -205,7 +227,7 @@
       statusDiv.className = ok ? 'status ok' : 'status err';
     }
     function lockUI(lock) {
-      [busIdEl, driverEl, destEl, intervalEl, btnClear].forEach(el => el.disabled = lock);
+      [busIdEl, driverEl, destEl, intervalEl, idleSecEl, btnClear].forEach(el => el.disabled = lock);
       banner.style.display = lock ? 'block' : 'none';
     }
     function addToTrail(lat, lng) {
@@ -305,6 +327,8 @@
         watchId = null;
         lockUI(false);
         btnAuto.textContent = '▶️ Start Auto Update';
+        btnRecenter.style.display = 'none';
+        clearTimeout(idleTimer);
         show('⏸️ Auto update stopped');
         return;
       }
@@ -315,8 +339,9 @@
       // reset stats
       lastLat = lastLng = lastTime = null;
       totalDistance = 0; speedSamples = [];
-      follow = true;                 // start following again
+      follow = true;
       btnRecenter.style.display = 'none';
+      scheduleIdleReveal(); // start idle timer
 
       show('▶️ Auto update started');
       btnAuto.textContent = '🛑 Stop Auto Update';
@@ -334,6 +359,9 @@
 
         // Only center if follow mode is active
         if (follow) map.setView([latitude, longitude]); // keep current zoom
+
+        // movement happened -> reschedule idle
+        scheduleIdleReveal();
 
         const now = Date.now();
         if (now - lastSentAt >= minGapMs) {
