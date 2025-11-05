@@ -95,7 +95,6 @@
     </div>
 
     <div id="map"></div>
-    <button id="btnSend" class="secondary" style="width:100%; margin-top:12px; font-size:1rem;">📤 Send Current Location</button>
 
     <div class="status" id="status"></div>
     <p class="hint" id="hint">Loading configuration…</p>
@@ -117,9 +116,7 @@
     const avgSpeedEl = document.getElementById('avgSpeed');
     const distanceEl = document.getElementById('distance');
     const intervalEl = document.getElementById('interval');
-    const rememberEl = document.getElementById('remember');
     const statusDiv = document.getElementById('status');
-    const btnSend = document.getElementById('btnSend');
     const btnAuto = document.getElementById('btnAuto');
     const btnClear = document.getElementById('btnClear');
     const hintEl = document.getElementById('hint');
@@ -184,7 +181,7 @@
     }
 
     function lockUI(lock) {
-      [busIdEl, driverEl, destEl, intervalEl, btnSend, btnClear].forEach(el => el.disabled = lock);
+      [busIdEl, driverEl, destEl, intervalEl, btnClear].forEach(el => el.disabled = lock);
       banner.style.display = lock ? 'block' : 'none';
     }
 
@@ -221,20 +218,6 @@
       distanceEl.value = totalDistance.toFixed(1);
     }
 
-    btnSend.onclick = () => {
-      if (!navigator.geolocation) return show('❌ Geolocation not supported', false);
-      acquireWakeLock();
-      navigator.geolocation.getCurrentPosition(pos => {
-        const { latitude, longitude } = pos.coords;
-        const speed = calculateSpeed(latitude, longitude);
-        updateStatsDisplay(speed);
-        marker.setLatLng([latitude, longitude]).bindPopup('📍 Current Position').openPopup();
-        map.setView([latitude, longitude]);
-        addToTrail(latitude, longitude);
-        postUpdate(latitude, longitude, speed);
-      }, err => show('❌ GPS error: ' + err.message, false), { enableHighAccuracy: true });
-    };
-
     let watchId = null, lastSentAt = 0;
     btnAuto.onclick = () => {
       const running = !!watchId;
@@ -264,6 +247,11 @@
       }, err => show('❌ ' + err.message, false), { enableHighAccuracy: true, maximumAge: 1000 });
       btnAuto.textContent = '🛑 Stop Auto Update';
       show('▶️ Auto update started');
+    };
+
+    btnClear.onclick = () => {
+      localStorage.removeItem('bus_sender_fields');
+      show('✅ Saved fields cleared');
     };
   </script>
 </body>
