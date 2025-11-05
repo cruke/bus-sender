@@ -17,7 +17,8 @@
       width:100%; font-size:1rem; padding:8px 10px; border-radius:8px; border:1px solid #c9d3e0; box-sizing:border-box; margin-top:6px;
       background:#fff;
     }
-    button { background:#0078ff; color:#fff; border:none; cursor:pointer; }
+    button { cursor:pointer; }
+    button.primary { background:#0078ff; color:#fff; border:none; }
     button.secondary { background:#eef3f8; color:#111; border:1px solid #c9d3e0; }
     button:hover { filter: brightness(0.95); }
     input:disabled, select:disabled, button:disabled { opacity:.6; pointer-events:none; }
@@ -26,7 +27,6 @@
     .ok { color: #137333; } .err { color: #b3261e; }
     .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
     .hint { font-size: 0.9rem; opacity: .8; }
-    /* Floating tracking banner */
     .tracking-banner {
       position:fixed; left:50%; bottom:16px; transform:translateX(-50%);
       background:#111; color:#fff; padding:10px 14px; border-radius:999px;
@@ -64,17 +64,6 @@
         <input type="text" id="destination" placeholder="e.g. Kuantan" />
       </div>
       <div>
-        <label for="eta">ETA (optional)</label>
-        <input type="text" id="eta" placeholder="e.g. 10:45 AM" />
-      </div>
-    </div>
-
-    <div class="row-3">
-      <div>
-        <label for="speed">Speed (m/s)</label>
-        <input type="number" id="speed" step="0.1" placeholder="optional (0 if unknown)" />
-      </div>
-      <div>
         <label for="interval">Auto interval (sec)</label>
         <select id="interval">
           <option value="3">3</option>
@@ -83,26 +72,36 @@
           <option value="15">15</option>
         </select>
       </div>
+    </div>
+
+    <div class="row-3">
       <div>
-        <label>&nbsp;</label>
-        <label class="hint"><input type="checkbox" id="remember" checked /> Remember these fields</label>
+        <label for="speed">Speed (m/s)</label>
+        <input type="number" id="speed" step="0.1" disabled />
+      </div>
+      <div>
+        <label for="avgSpeed">Avg Speed (m/s)</label>
+        <input type="number" id="avgSpeed" step="0.1" disabled />
+      </div>
+      <div>
+        <label for="distance">Distance (m)</label>
+        <input type="number" id="distance" step="1" disabled />
       </div>
     </div>
 
     <div class="toolbar">
-      <button id="btnAuto" class="secondary">▶️ Start Auto Update</button>
+      <button id="btnAuto" class="primary">▶️ Start Auto Update</button>
       <button id="btnClear" class="secondary">🧹 Clear Saved Fields</button>
     </div>
 
     <div id="map"></div>
-    <!-- Send button moved below map -->
-    <button id="btnSend" style="width:100%; margin-top:12px; font-size:1rem;">📤 Send Current Location</button>
+    <button id="btnSend" class="secondary" style="width:100%; margin-top:12px; font-size:1rem;">📤 Send Current Location</button>
 
     <div class="status" id="status"></div>
     <p class="hint" id="hint">Loading configuration…</p>
   </main>
 
-  <div id="trackingBanner" class="tracking-banner" role="status" aria-live="polite">
+  <div id="trackingBanner" class="tracking-banner">
     <span class="tracking-dot"></span> Tracking Active — fields locked
   </div>
 
@@ -114,8 +113,9 @@
     const busIdEl = document.getElementById('busId');
     const driverEl = document.getElementById('driver');
     const destEl = document.getElementById('destination');
-    const etaEl = document.getElementById('eta');
     const speedEl = document.getElementById('speed');
+    const avgSpeedEl = document.getElementById('avgSpeed');
+    const distanceEl = document.getElementById('distance');
     const intervalEl = document.getElementById('interval');
     const rememberEl = document.getElementById('remember');
     const statusDiv = document.getElementById('status');
@@ -125,159 +125,146 @@
     const hintEl = document.getElementById('hint');
     const banner = document.getElementById('trackingBanner');
 
-    const allInputs = [busIdEl, driverEl, destEl, etaEl, speedEl, intervalEl, rememberEl];
-    const allButtonsToLock = [btnSend, btnClear];
+    let lastLat = null, lastLng = null, lastTime = null;
+    let trailPoints = [];
+    let totalDistance = 0, avgSpeed = 0, speedSamples = [];
 
-    function show(msg, ok=true) {
+    const map = L.map('map').setView([3.54, 103.43], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: false }).addTo(map);
+    const marker = L.marker([3.54, 103.43]).addTo(map).bindPopup('Locating…');
+    const trail = L.polyline(trailPoints, { color:'#0078ff', weight:5, opacity:0.75 }).addTo(map);
+
+    function show(msg, ok = true) {
       statusDiv.textContent = msg;
       statusDiv.className = ok ? 'status ok' : 'status err';
     }
 
-    // Save & load remembered fields
-    const LS_KEY = 'bus_sender_fields';
-    const LS_REMEMBER_KEY = 'bus_sender_remember';
-
-    function saveFields() {
-      const remember = rememberEl.checked;
-      localStorage.setItem(LS_REMEMBER_KEY, remember ? '1' : '0');
-      if (!remember) return;
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        busId: busIdEl.value.trim(),
-        driver: driverEl.value.trim(),
-        dest: destEl.value.trim(),
-        eta: etaEl.value.trim(),
-        speed: speedEl.value,
-        interval: intervalEl.value
-      }));
-    }
-    function loadFields() {
-      rememberEl.checked = localStorage.getItem(LS_REMEMBER_KEY) === '1';
-      try {
-        const d = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-        if (d.busId) busIdEl.value = d.busId;
-        if (d.driver) driverEl.value = d.driver;
-        if (d.dest) destEl.value = d.dest;
-        if (d.eta) etaEl.value = d.eta;
-        if (d.speed) speedEl.value = d.speed;
-        if (d.interval) intervalEl.value = d.interval;
-      } catch {}
-    }
-
-    [busIdEl, driverEl, destEl, etaEl, speedEl, intervalEl].forEach(el=>{
-      el.addEventListener('input', saveFields);
-      el.addEventListener('change', saveFields);
-    });
-
-    rememberEl.addEventListener('change', saveFields);
-    btnClear.onclick = () => {
-      localStorage.removeItem(LS_KEY);
-      localStorage.removeItem(LS_REMEMBER_KEY);
-      show('✅ Saved fields cleared');
-    };
-
-    const map = L.map('map').setView([3.54,103.43],14);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:false }).addTo(map);
-    const marker = L.marker([3.54,103.43]).addTo(map).bindPopup('Locating…');
-    let trailPoints = [];
-    const trail = L.polyline(trailPoints, { color:'#0078ff', weight:5, opacity:0.75 }).addTo(map);
-    function addToTrail(lat,lng){
-      trailPoints.push([lat,lng]);
-      if(trailPoints.length>TRAIL_MAX_POINTS) trailPoints.splice(0,trailPoints.length-TRAIL_MAX_POINTS);
+    function addToTrail(lat, lng) {
+      trailPoints.push([lat, lng]);
+      if (trailPoints.length > TRAIL_MAX_POINTS) trailPoints.splice(0, trailPoints.length - TRAIL_MAX_POINTS);
       trail.setLatLngs(trailPoints);
     }
 
+    // Haversine formula
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const toRad = deg => deg * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function calculateSpeed(lat, lng) {
+      if (lastLat === null) {
+        lastLat = lat; lastLng = lng; lastTime = Date.now();
+        return 0;
+      }
+      const dist = haversine(lastLat, lastLng, lat, lng);
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      const speed = dt > 0 ? dist / dt : 0;
+      totalDistance += dist;
+      speedSamples.push(speed);
+      avgSpeed = speedSamples.reduce((a,b)=>a+b,0)/speedSamples.length;
+      lastLat = lat; lastLng = lng; lastTime = now;
+      return speed;
+    }
+
     // Wake Lock
-    let wakeLock=null;
+    let wakeLock = null;
     async function acquireWakeLock() {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
-          wakeLock.addEventListener('release', ()=>console.log('🔋 WakeLock released'));
-          console.log('🔋 WakeLock acquired');
+          wakeLock.addEventListener('release', () => console.log('WakeLock released'));
         }
       } catch (e) { console.warn('WakeLock failed:', e); }
     }
 
-    function setLockedState(locked){
-      allInputs.forEach(el=>el.disabled=locked);
-      allButtonsToLock.forEach(el=>el.disabled=locked);
-      banner.style.display=locked?'block':'none';
+    function lockUI(lock) {
+      [busIdEl, driverEl, destEl, intervalEl, btnSend, btnClear].forEach(el => el.disabled = lock);
+      banner.style.display = lock ? 'block' : 'none';
     }
 
-    async function postUpdate(lat,lng){
+    async function postUpdate(lat, lng, speed) {
       const payload = {
         busId: busIdEl.value.trim(),
         timestamp: new Date().toISOString(),
-        lat,lng,
+        lat, lng,
         destination: destEl.value.trim(),
         driver: driverEl.value.trim(),
-        eta: etaEl.value.trim(),
-        speed_mps:Number(speedEl.value||0)
+        speed_mps: speed
       };
-      if(!payload.busId) return show('❌ Enter Bus ID',false);
-      if(!payload.driver) return show('❌ Enter Driver Name',false);
+      if (!payload.busId) return show('❌ Enter Bus ID', false);
+      if (!payload.driver) return show('❌ Enter Driver Name', false);
 
-      try{
-        const res = await fetch(WEB_APP_URL,{
-          method:'POST',
-          headers:{'Content-Type':'text/plain'},
-          body:JSON.stringify(payload)
+      try {
+        const res = await fetch(WEB_APP_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
         });
-        const data=await res.json();
-        if(data.ok){
-          show(`✅ Sent ${payload.busId} @ ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-          saveFields();
-        }else show('❌ Error: '+(data.error||'Unknown'),false);
-      }catch(e){show('❌ Network error: '+e.message,false);}
+        const data = await res.json();
+        if (data.ok) {
+          show(`✅ Sent ${payload.busId} @ ${lat.toFixed(5)}, ${lng.toFixed(5)} (${speed.toFixed(2)} m/s)`);
+        } else show('❌ Error: ' + (data.error || 'Unknown'), false);
+      } catch (e) {
+        show('❌ Network error: ' + e.message, false);
+      }
     }
 
-    btnSend.onclick = async ()=>{
-      if(!navigator.geolocation) return show('❌ Geolocation not supported',false);
-      await acquireWakeLock();
-      navigator.geolocation.getCurrentPosition(pos=>{
-        const {latitude,longitude}=pos.coords;
-        marker.setLatLng([latitude,longitude]).bindPopup('📍 Current').openPopup();
-        map.setView([latitude,longitude]);
-        addToTrail(latitude,longitude);
-        postUpdate(latitude,longitude);
-      },err=>show('❌ '+err.message,false),{enableHighAccuracy:true});
+    function updateStatsDisplay(speed) {
+      speedEl.value = speed.toFixed(2);
+      avgSpeedEl.value = avgSpeed.toFixed(2);
+      distanceEl.value = totalDistance.toFixed(1);
+    }
+
+    btnSend.onclick = () => {
+      if (!navigator.geolocation) return show('❌ Geolocation not supported', false);
+      acquireWakeLock();
+      navigator.geolocation.getCurrentPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        const speed = calculateSpeed(latitude, longitude);
+        updateStatsDisplay(speed);
+        marker.setLatLng([latitude, longitude]).bindPopup('📍 Current Position').openPopup();
+        map.setView([latitude, longitude]);
+        addToTrail(latitude, longitude);
+        postUpdate(latitude, longitude, speed);
+      }, err => show('❌ GPS error: ' + err.message, false), { enableHighAccuracy: true });
     };
 
-    let watchId=null,lastSentAt=0;
-    btnAuto.onclick=async()=>{
-      const running=!!watchId;
-      if(running){
+    let watchId = null, lastSentAt = 0;
+    btnAuto.onclick = () => {
+      const running = !!watchId;
+      if (running) {
         navigator.geolocation.clearWatch(watchId);
-        watchId=null;
-        setLockedState(false);
-        btnAuto.textContent='▶️ Start Auto Update';
+        watchId = null;
+        lockUI(false);
+        btnAuto.textContent = '▶️ Start Auto Update';
         show('⏸️ Auto update stopped');
         return;
       }
-      await acquireWakeLock();
-      const minGapMs=Number(intervalEl.value)*1000;
-      setLockedState(true);
-      watchId=navigator.geolocation.watchPosition(pos=>{
-        const {latitude,longitude}=pos.coords;
-        marker.setLatLng([latitude,longitude]);
-        map.setView([latitude,longitude]);
-        addToTrail(latitude,longitude);
-        const now=Date.now();
-        if(now-lastSentAt>=minGapMs){lastSentAt=now;postUpdate(latitude,longitude);}
-      },err=>show('❌ '+err.message,false),{enableHighAccuracy:true});
-      btnAuto.textContent='🛑 Stop Auto Update';
+      acquireWakeLock();
+      const minGapMs = Number(intervalEl.value) * 1000;
+      lockUI(true);
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        const speed = calculateSpeed(latitude, longitude);
+        updateStatsDisplay(speed);
+        marker.setLatLng([latitude, longitude]);
+        map.setView([latitude, longitude]);
+        addToTrail(latitude, longitude);
+        const now = Date.now();
+        if (now - lastSentAt >= minGapMs) {
+          lastSentAt = now;
+          postUpdate(latitude, longitude, speed);
+        }
+      }, err => show('❌ ' + err.message, false), { enableHighAccuracy: true, maximumAge: 1000 });
+      btnAuto.textContent = '🛑 Stop Auto Update';
       show('▶️ Auto update started');
     };
-
-    async function loadConfig(){
-      try{
-        const res=await fetch(WEB_APP_URL+'?info=1');
-        const js=await res.json();
-        if(js.ok) hintEl.textContent=`Each bus ID is stored in its own sheet (keeps last ${js.maxRows} rows).`;
-      }catch{hintEl.textContent='Could not load configuration.';}
-    }
-
-    loadFields(); loadConfig();
   </script>
 </body>
 </html>
