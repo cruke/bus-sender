@@ -27,6 +27,7 @@
     .ok { color: #137333; } .err { color: #b3261e; }
     .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
     .hint { font-size: 0.9rem; opacity: .8; }
+
     .tracking-banner {
       position:fixed; left:50%; bottom:16px; transform:translateX(-50%);
       background:#111; color:#fff; padding:10px 14px; border-radius:999px;
@@ -97,7 +98,9 @@
     <div id="map"></div>
 
     <div class="status" id="status"></div>
-    <p class="hint" id="hint">Loading configuration…</p>
+    <p class="hint" id="hint">
+      This page posts to your Apps Script endpoint. Each bus ID will be stored in its own sheet.
+    </p>
   </main>
 
   <div id="trackingBanner" class="tracking-banner">
@@ -106,49 +109,87 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
+    // --------- CONFIG ---------
     const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyuInv2pTegro2wfqdMOHX1-dUKq2SY98QpP-Cm5iqFEPmHPd8kHnYv0deGQknViQSM/exec";
     const TRAIL_MAX_POINTS = 1000;
+    const LS_KEY = 'bus_sender_fields';
 
+    // --------- DOM ---------
     const busIdEl = document.getElementById('busId');
     const driverEl = document.getElementById('driver');
-    const destEl = document.getElementById('destination');
+    const destEl   = document.getElementById('destination');
+    const intervalEl = document.getElementById('interval');
+
     const speedEl = document.getElementById('speed');
     const avgSpeedEl = document.getElementById('avgSpeed');
     const distanceEl = document.getElementById('distance');
-    const intervalEl = document.getElementById('interval');
+
     const statusDiv = document.getElementById('status');
     const btnAuto = document.getElementById('btnAuto');
     const btnClear = document.getElementById('btnClear');
-    const hintEl = document.getElementById('hint');
     const banner = document.getElementById('trackingBanner');
 
-    let lastLat = null, lastLng = null, lastTime = null;
-    let trailPoints = [];
-    let totalDistance = 0, avgSpeed = 0, speedSamples = [];
-
+    // --------- Map ---------
     const map = L.map('map').setView([3.54, 103.43], 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: false }).addTo(map);
     const marker = L.marker([3.54, 103.43]).addTo(map).bindPopup('Locating…');
-    const trail = L.polyline(trailPoints, { color:'#0078ff', weight:5, opacity:0.75 }).addTo(map);
+    const trail = L.polyline([], { color:'#0078ff', weight:5, opacity:0.75 }).addTo(map);
 
+    // --------- State for speed/avg/distance ---------
+    let lastLat = null, lastLng = null, lastTime = null;
+    let totalDistance = 0;
+    let speedSamples = [];
+    let watchId = null, lastSentAt = 0;
+
+    // --------- Local Storage ---------
+    function saveFields() {
+      const data = {
+        busId: busIdEl.value.trim(),
+        driver: driverEl.value.trim(),
+        dest: destEl.value.trim(),
+        interval: intervalEl.value
+      };
+      localStorage.setItem(LS_KEY, JSON.stringify(data));
+    }
+    function loadFields() {
+      try {
+        const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        if (data.busId) busIdEl.value = data.busId;
+        if (data.driver) driverEl.value = data.driver;
+        if (data.dest) destEl.value = data.dest;
+        if (data.interval) intervalEl.value = data.interval;
+      } catch (_) {}
+    }
+    function clearFields() {
+      localStorage.removeItem(LS_KEY);
+      show('✅ Saved fields cleared');
+    }
+    [busIdEl, driverEl, destEl, intervalEl].forEach(el => el.addEventListener('change', saveFields));
+
+    // --------- UI helpers ---------
     function show(msg, ok = true) {
       statusDiv.textContent = msg;
       statusDiv.className = ok ? 'status ok' : 'status err';
     }
-
+    function lockUI(lock) {
+      [busIdEl, driverEl, destEl, intervalEl, btnClear].forEach(el => el.disabled = lock);
+      banner.style.display = lock ? 'block' : 'none';
+    }
     function addToTrail(lat, lng) {
-      trailPoints.push([lat, lng]);
-      if (trailPoints.length > TRAIL_MAX_POINTS) trailPoints.splice(0, trailPoints.length - TRAIL_MAX_POINTS);
-      trail.setLatLngs(trailPoints);
+      const pts = trail.getLatLngs();
+      pts.push([lat, lng]);
+      if (pts.length > TRAIL_MAX_POINTS) pts.splice(0, pts.length - TRAIL_MAX_POINTS);
+      trail.setLatLngs(pts);
     }
 
-    // Haversine formula
+    // --------- Haversine (meters) ---------
     function haversine(lat1, lon1, lat2, lon2) {
       const R = 6371000;
-      const toRad = deg => deg * Math.PI / 180;
+      const toRad = d => d * Math.PI / 180;
       const dLat = toRad(lat2 - lat1);
       const dLon = toRad(lon2 - lon1);
-      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+      const a = Math.sin(dLat/2)**2
+              + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       return R * c;
     }
@@ -164,27 +205,36 @@
       const speed = dt > 0 ? dist / dt : 0;
       totalDistance += dist;
       speedSamples.push(speed);
-      avgSpeed = speedSamples.reduce((a,b)=>a+b,0)/speedSamples.length;
       lastLat = lat; lastLng = lng; lastTime = now;
       return speed;
     }
 
-    // Wake Lock
+    function updateStatsDisplay(currentSpeed) {
+      const avg = speedSamples.length
+        ? (speedSamples.reduce((a,b)=>a+b,0) / speedSamples.length)
+        : 0;
+      speedEl.value = currentSpeed.toFixed(2);
+      avgSpeedEl.value = avg.toFixed(2);
+      distanceEl.value = totalDistance.toFixed(1);
+    }
+
+    // --------- Wake Lock ---------
     let wakeLock = null;
     async function acquireWakeLock() {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
           wakeLock.addEventListener('release', () => console.log('WakeLock released'));
+          document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+              wakeLock = await navigator.wakeLock.request('screen');
+            }
+          });
         }
       } catch (e) { console.warn('WakeLock failed:', e); }
     }
 
-    function lockUI(lock) {
-      [busIdEl, driverEl, destEl, intervalEl, btnClear].forEach(el => el.disabled = lock);
-      banner.style.display = lock ? 'block' : 'none';
-    }
-
+    // --------- Network ---------
     async function postUpdate(lat, lng, speed) {
       const payload = {
         busId: busIdEl.value.trim(),
@@ -200,25 +250,21 @@
       try {
         const res = await fetch(WEB_APP_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: { 'Content-Type': 'text/plain' }, // avoid CORS preflight
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (data.ok) {
           show(`✅ Sent ${payload.busId} @ ${lat.toFixed(5)}, ${lng.toFixed(5)} (${speed.toFixed(2)} m/s)`);
-        } else show('❌ Error: ' + (data.error || 'Unknown'), false);
+        } else {
+          show('❌ Error: ' + (data.error || 'Unknown'), false);
+        }
       } catch (e) {
         show('❌ Network error: ' + e.message, false);
       }
     }
 
-    function updateStatsDisplay(speed) {
-      speedEl.value = speed.toFixed(2);
-      avgSpeedEl.value = avgSpeed.toFixed(2);
-      distanceEl.value = totalDistance.toFixed(1);
-    }
-
-    let watchId = null, lastSentAt = 0;
+    // --------- Tracking ---------
     btnAuto.onclick = () => {
       const running = !!watchId;
       if (running) {
@@ -229,30 +275,41 @@
         show('⏸️ Auto update stopped');
         return;
       }
-      acquireWakeLock();
+
+      if (!navigator.geolocation) return show('❌ Geolocation not supported', false);
       const minGapMs = Number(intervalEl.value) * 1000;
+      lastLat = lastLng = lastTime = null;
+      totalDistance = 0; speedSamples = [];
+      show('▶️ Auto update started');
+      btnAuto.textContent = '🛑 Stop Auto Update';
       lockUI(true);
+      saveFields();
+      acquireWakeLock();
+
       watchId = navigator.geolocation.watchPosition(pos => {
         const { latitude, longitude } = pos.coords;
         const speed = calculateSpeed(latitude, longitude);
         updateStatsDisplay(speed);
+
         marker.setLatLng([latitude, longitude]);
-        map.setView([latitude, longitude]);
         addToTrail(latitude, longitude);
+
         const now = Date.now();
         if (now - lastSentAt >= minGapMs) {
           lastSentAt = now;
           postUpdate(latitude, longitude, speed);
         }
-      }, err => show('❌ ' + err.message, false), { enableHighAccuracy: true, maximumAge: 1000 });
-      btnAuto.textContent = '🛑 Stop Auto Update';
-      show('▶️ Auto update started');
+      }, err => show('❌ ' + err.message, false), {
+        enableHighAccuracy: true,
+        maximumAge: 1000
+      });
     };
 
-    btnClear.onclick = () => {
-      localStorage.removeItem('bus_sender_fields');
-      show('✅ Saved fields cleared');
-    };
+    // --------- Clear saved ---------
+    btnClear.onclick = () => clearFields();
+
+    // --------- Boot ---------
+    loadFields();
   </script>
 </body>
 </html>
