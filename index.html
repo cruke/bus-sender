@@ -1,142 +1,305 @@
-// =======================
-// SUSTAIN – Bus Sender Backend (Apps Script)
-// Matches current sender HTML payload
-// =======================
-
-/** Your Google Sheet ID (one sheet per Route will be created/used) */
-const SPREADSHEET_ID = '1hBVwhIawyxcpr5Qj6MeDwYbmkSXLw1p-1x_pnLfEWN8';
-
-/** How many latest rows to keep per Route sheet (excluding header). */
-const MAX_POINTS = 1000;
-
-/** Header order used in all Route sheets */
-const HEADERS = ['timestamp', 'lat', 'lng', 'destination', 'driver', 'plate', 'speed_mps'];
-
-function ss_() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
-}
-
-/** Ensure the Route sheet exists with correct headers (row 1, frozen). */
-function getOrCreateSheet_(route) {
-  const book = ss_();
-  let sh = book.getSheetByName(route);
-  if (!sh) {
-    sh = book.insertSheet(route);
-    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    sh.setFrozenRows(1);
-    return sh;
-  }
-  // ensure header row matches
-  const firstRow = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
-  const ok = firstRow.length === HEADERS.length &&
-             firstRow.every((h, i) => String(h).trim().toLowerCase() === HEADERS[i]);
-  if (!ok) {
-    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    sh.setFrozenRows(1);
-  }
-  return sh;
-}
-
-/** Insert latest row at top (row 2) and prune to MAX_POINTS data rows. */
-function insertTopAndPrune_(sh, rowObj) {
-  // make room at row 2
-  sh.insertRowsAfter(1, 1);
-  const row = [
-    rowObj.timestamp,
-    rowObj.lat,
-    rowObj.lng,
-    rowObj.destination,
-    rowObj.driver,
-    rowObj.plate,
-    rowObj.speed_mps
-  ];
-  sh.getRange(2, 1, 1, HEADERS.length).setValues([row]);
-
-  // prune: keep rows 2 .. MAX_POINTS+1
-  const lastRow = sh.getLastRow();
-  const dataRows = Math.max(0, lastRow - 1);
-  if (dataRows > MAX_POINTS) {
-    const rowsToDelete = dataRows - MAX_POINTS;
-    const startDelete = MAX_POINTS + 2; // header(1) + MAX_POINTS
-    const finalRow = sh.getLastRow();
-    if (startDelete <= finalRow) {
-      sh.deleteRows(startDelete, Math.min(rowsToDelete, finalRow - startDelete + 1));
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bus Location Sender</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#f5f7fa; color:#111; }
+    header { background:#0078ff; color:#fff; padding:10px 16px; font-size:1.1rem; font-weight:600; }
+    main { padding:14px; max-width:780px; margin: 0 auto; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    label { font-weight:600; margin-top:10px; display:block; }
+    input, button {
+      width:100%; font-size:1rem; padding:8px 10px; border-radius:8px;
+      border:1px solid #c9d3e0; box-sizing:border-box; margin-top:6px; background:#fff;
     }
-  }
-}
+    button { cursor:pointer; }
+    button.primary { background:#0078ff; color:#fff; border:none; }
+    button.secondary { background:#eef3f8; color:#111; border:1px solid #c9d3e0; }
+    input:disabled, button:disabled { opacity:.6; pointer-events:none; }
 
-/** Helpers */
-function num_(x, d) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : d;
-}
-function str_(x) {
-  return (x == null) ? '' : String(x).trim();
-}
+    #map { height:360px; border-radius:10px; margin-top:14px; position:relative; overflow:hidden; }
 
-/** ============ Web App Entrypoints ============ */
+    .status { margin-top:10px; font-size:0.95rem; min-height:1.2em; }
+    .status.ok { color:#137333; font-weight:700; }
+    .status.err { color:#b3261e; font-weight:600; }
 
-/** GET:
- *  - ?info=1  -> { ok:true, maxRows: MAX_POINTS }
- *  - else     -> simple message (optional)
- */
-function doGet(e) {
-  if (e && e.parameter && e.parameter.info === '1') {
-    return ContentService
-      .createTextOutput(JSON.stringify({ ok: true, maxRows: MAX_POINTS }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, message: 'SUSTAIN sender API: POST points here; use ?info=1 for config.' }))
-    .setMimeType(ContentService.MimeType.JSON);
-}
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
 
-/** POST (Content-Type: text/plain; body = JSON):
- * {
- *   busId, driver, destination, plate,
- *   lat, lng, speed_mps, timestamp
- * }
- */
-function doPost(e) {
-  try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return json_({ ok: false, error: 'Empty body' });
+    .icon-badge {
+      position:absolute; bottom:10px; z-index:600;
+      width:42px; height:42px; border-radius:50%;
+      background:rgba(255,255,255,0.95);
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 2px 6px rgba(0,0,0,.25);
+      font-size:20px; border:1px solid #d8dee9;
+      user-select:none;
+    }
+    #wakeIcon { right:10px; pointer-events:none; }
+    #mapTypeIcon { left:10px; cursor:pointer; }
+
+    .wake-on { background:#e6ffea; border-color:#75d08a; }
+    .wake-off { background:rgba(255,255,255,0.95); border-color:#d8dee9; }
+
+    /* Hide Leaflet attribution */
+    .leaflet-control-attribution,
+    .leaflet-control-scale { display:none !important; }
+  </style>
+</head>
+<body>
+  <header>🚌 Bus Location Sender</header>
+  <main>
+    <div class="row">
+      <div>
+        <label for="busId">Route <span style="color:#b3261e">*</span></label>
+        <input type="text" id="busId" placeholder="e.g. 201, 206, 305" />
+      </div>
+      <div>
+        <label for="destination">Destination <span style="color:#b3261e">*</span></label>
+        <input type="text" id="destination" placeholder="e.g. Kuantan" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="driver">Driver Name (optional)</label>
+        <input type="text" id="driver" placeholder="e.g. Najmi" />
+      </div>
+      <div>
+        <label for="plate">No. Plate (optional)</label>
+        <input type="text" id="plate" placeholder="e.g. CEE 1234" />
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button id="btnAuto" class="primary" disabled>▶️ Start Auto Update</button>
+      <button id="btnClear" class="secondary">🧹 Clear Saved Fields</button>
+    </div>
+
+    <div id="map">
+      <div id="mapTypeIcon" class="icon-badge" title="Switch Map Type">🗺️</div>
+      <div id="wakeIcon" class="icon-badge wake-off" title="Wake Lock status">💡</div>
+    </div>
+
+    <div class="status" id="status"></div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // --------- CONFIG ---------
+    const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyuInv2pTegro2wfqdMOHX1-dUKq2SY98QpP-Cm5iqFEPmHPd8kHnYv0deGQknViQSM/exec";
+    const TRAIL_MAX_POINTS = 1000;
+    const POST_INTERVAL_MS = 5000;
+
+    // --------- DOM refs ---------
+    const routeEl = document.getElementById('busId');          // Route (required)
+    const destEl  = document.getElementById('destination');    // Destination (required)
+    const driverEl= document.getElementById('driver');         // optional
+    const plateEl = document.getElementById('plate');          // optional
+    const statusDiv = document.getElementById('status');
+    const btnAuto = document.getElementById('btnAuto');
+    const btnClear = document.getElementById('btnClear');
+    const wakeIcon = document.getElementById('wakeIcon');
+    const mapTypeIcon = document.getElementById('mapTypeIcon');
+
+    // --------- Local storage helpers ---------
+    const LS_KEY = 'bus_sender_fields_v3';
+    function saveFields() {
+      const d = {
+        route: routeEl.value.trim(),
+        dest: destEl.value.trim(),
+        driver: driverEl.value.trim(),
+        plate: plateEl.value.trim()
+      };
+      localStorage.setItem(LS_KEY, JSON.stringify(d));
+      validateRequired(); // re-check button enablement
+    }
+    function loadFields() {
+      try {
+        const d = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        if (d.route) routeEl.value = d.route;
+        if (d.dest)  destEl.value  = d.dest;
+        if (d.driver) driverEl.value = d.driver;
+        if (d.plate)  plateEl.value  = d.plate;
+      } catch (_) {}
+    }
+    function clearFields() {
+      localStorage.removeItem(LS_KEY);
+      routeEl.value = '';
+      destEl.value = '';
+      driverEl.value = '';
+      plateEl.value = '';
+      validateRequired();
+      show('✅ Saved fields cleared');
     }
 
-    let data;
-    try {
-      data = JSON.parse(e.postData.contents);
-    } catch (err) {
-      return json_({ ok: false, error: 'Invalid JSON' });
+    [routeEl, destEl, driverEl, plateEl].forEach(el => el.addEventListener('input', saveFields));
+    loadFields();
+
+    // --------- Enable Start only if Route & Destination are filled ---------
+    function validateRequired() {
+      const ok = !!routeEl.value.trim() && !!destEl.value.trim();
+      btnAuto.disabled = !ok;
+    }
+    validateRequired();
+
+    // --------- UI feedback ---------
+    function show(msg, ok = true) {
+      statusDiv.textContent = msg;
+      statusDiv.className = ok ? 'status ok' : 'status err';
+    }
+    function lockForm(lock) {
+      [routeEl, destEl, driverEl, plateEl, btnClear].forEach(e => e.disabled = lock);
     }
 
-    const route = str_(data.busId) || 'UNKNOWN';
-    const driver = str_(data.driver);
-    const destination = str_(data.destination);
-    const plate = str_(data.plate);
-    const lat = num_(data.lat, NaN);
-    const lng = num_(data.lng, NaN);
-    const speed_mps = num_(data.speed_mps, 0);
-    const timestamp = str_(data.timestamp) || new Date().toISOString();
+    // --------- Map setup ---------
+    let map = L.map('map', { attributionControl:false }).setView([3.54, 103.43], 14);
+    const layers = {
+      streets:   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'),
+      satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'),
+      osm:       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+    };
+    const labelsOverlay = L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png', { opacity:0.9 });
+    let baseKey='streets';
+    layers[baseKey].addTo(map); labelsOverlay.addTo(map);
+    const baseOrder=['streets','satellite','osm'];
+    function switchMapType() {
+      map.removeLayer(layers[baseKey]);
+      baseKey=baseOrder[(baseOrder.indexOf(baseKey)+1)%baseOrder.length];
+      layers[baseKey].addTo(map);
+      if (!map.hasLayer(labelsOverlay)) labelsOverlay.addTo(map);
+      show('Map: '+baseKey);
+    }
+    mapTypeIcon.onclick=switchMapType;
 
-    if (!route) return json_({ ok: false, error: 'Missing busId/route' });
-    if (!driver) return json_({ ok: false, error: 'Missing driver' });
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return json_({ ok: false, error: 'Invalid coordinates' });
+    // Clean bus icon (white circle)
+    const busIcon = L.divIcon({
+      html:`<div style="width:40px;height:40px;background:white;border-radius:50%;
+                   display:flex;align-items:center;justify-content:center;
+                   font-size:22px;">🚍</div>`,
+      iconSize:[40,40],iconAnchor:[20,20]
+    });
+
+    const marker = L.marker([3.54,103.43],{icon:busIcon}).addTo(map);
+    const trail = L.polyline([], { color:'#0078ff', weight:5, opacity:0.85 }).addTo(map);
+
+    function updateTrail(lat,lng){
+      const pts=trail.getLatLngs();
+      pts.push([lat,lng]);
+      if(pts.length>TRAIL_MAX_POINTS)pts.splice(0,pts.length-TRAIL_MAX_POINTS);
+      trail.setLatLngs(pts);
     }
 
-    const sh = getOrCreateSheet_(route);
-    insertTopAndPrune_(sh, { timestamp, lat, lng, destination, driver, plate, speed_mps });
+    // --------- Speed / distance stats (km/h) ---------
+    let watchId=null,lastPos=null,startTime=null,totalDist=0,lastPost=0;
+    function haversine(a,b,c,d){const R=6371000,toRad=x=>x*Math.PI/180;const dLat=toRad(c-a),dLon=toRad(d-b);const x=Math.sin(dLat/2)**2+Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+    function updateStats(lat,lng,t){
+      if(!startTime)startTime=t;
+      let inst=0;if(lastPos){const d=haversine(lastPos.lat,lastPos.lng,lat,lng);const dt=(t-lastPos.time)/1000;if(dt>0){inst=d/dt;totalDist+=d;}}
+      lastPos={lat,lng,time:t};
+      const elapsed=(t-startTime)/1000;const avg=(elapsed>0?totalDist/elapsed:0);
+      show(`🚍 ${(inst*3.6).toFixed(1)} km/h | Avg ${(avg*3.6).toFixed(1)} | Dist ${(totalDist/1000).toFixed(2)} km`);
+      return inst;
+    }
 
-    return json_({ ok: true });
-  } catch (err) {
-    return json_({ ok: false, error: String(err) });
-  }
-}
+    // --------- Networking ---------
+    async function postUpdate(lat, lng, speed) {
+      const payload = {
+        busId: routeEl.value.trim(),
+        timestamp: new Date().toISOString(),
+        lat, lng,
+        destination: destEl.value.trim(),
+        driver: driverEl.value.trim(),   // optional (can be empty)
+        plate: plateEl.value.trim(),     // optional (can be empty)
+        speed_mps: Number(speed || 0)
+      };
 
-/** JSON response helper */
-function json_(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
+      if (!payload.busId || !payload.destination) {
+        // Button is already disabled if missing; this is just a guard.
+        return show('❌ Route & Destination are required', false);
+      }
+
+      try {
+        // IMPORTANT: text/plain avoids preflight (OPTIONS) to Apps Script
+        const res = await fetch(WEB_APP_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          // success: no extra toast (status already shows speed/avg/dist live)
+        } else {
+          show('❌ Error: ' + (data.error || 'Unknown'), false);
+        }
+      } catch (e) {
+        show('❌ Network error: ' + e.message, false);
+      }
+    }
+
+    // --------- Wake Lock ---------
+    let wakeLock=null;
+    async function acquireWake(){
+      try{
+        if(!('wakeLock'in navigator))return;
+        wakeLock=await navigator.wakeLock.request('screen');
+        wakeIcon.classList.add('wake-on'); wakeIcon.textContent='🔆';
+      }catch{}
+    }
+    async function releaseWake(){
+      if(wakeLock){ try{ await wakeLock.release(); }catch{} wakeLock=null; }
+      wakeIcon.classList.remove('wake-on'); wakeIcon.textContent='💡';
+    }
+
+    // --------- Start/Stop Auto Update ---------
+    btnAuto.onclick=async()=>{
+      // If disabled, do nothing (guard)
+      if (btnAuto.disabled) return;
+
+      if(watchId){
+        navigator.geolocation.clearWatch(watchId);
+        watchId=null;
+        await releaseWake();
+        btnAuto.textContent='▶️ Start Auto Update';
+        lockForm(false);
+        show('⏸️ Auto update stopped');
+        return;
+      }
+      if(!navigator.geolocation) return show('❌ Geolocation not supported', false);
+
+      // guard: require route + destination (should already be true)
+      if (!routeEl.value.trim() || !destEl.value.trim()) {
+        return show('❌ Fill Route & Destination first', false);
+      }
+
+      lastPos=null;startTime=null;totalDist=0;lastPost=0;trail.setLatLngs([]);
+      lockForm(true);
+      btnAuto.textContent='🛑 Stop Auto Update';
+      show('▶️ Auto update started');
+      await acquireWake();
+
+      watchId=navigator.geolocation.watchPosition(pos=>{
+        const { latitude, longitude } = pos.coords;
+        const now=pos.timestamp || Date.now();
+        marker.setLatLng([latitude, longitude]);
+        updateTrail(latitude, longitude);
+        map.setView([latitude, longitude], map.getZoom());
+        const spd=updateStats(latitude, longitude, now);
+        if(!lastPost || (Date.now()-lastPost)>=POST_INTERVAL_MS){
+          lastPost=Date.now();
+          postUpdate(latitude, longitude, spd);
+        }
+      }, err=>show('❌ ' + err.message, false), { enableHighAccuracy: true, maximumAge: 1000 });
+
+      saveFields();
+    };
+
+    // --------- Clear saved ---------
+    btnClear.onclick = () => { clearFields(); };
+
+  </script>
+</body>
+</html>
