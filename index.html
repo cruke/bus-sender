@@ -6,47 +6,181 @@
   <title>Bus Location Sender</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#f5f7fa; color:#111; }
-    header { background:#0078ff; color:#fff; padding:10px 16px; font-size:1.1rem; font-weight:600; }
-    main { padding:14px; max-width:780px; margin: 0 auto; }
-    .row { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
-    label { font-weight:600; margin-top:10px; display:block; }
-    input, button {
-      width:100%; font-size:1rem; padding:8px 10px; border-radius:8px;
-      border:1px solid #c9d3e0; box-sizing:border-box; margin-top:6px; background:#fff;
+    :root {
+      color-scheme: only light; /* force light mode everywhere */
     }
-    button { cursor:pointer; }
-    button.primary { background:#0078ff; color:#fff; border:none; }
-    button.secondary { background:#eef3f8; color:#111; border:1px solid #c9d3e0; }
-    input:disabled, button:disabled { opacity:.6; pointer-events:none; }
 
-    #map { height:360px; border-radius:10px; margin-top:14px; position:relative; overflow:hidden; }
+    html, body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #f5f7fa;
+      color: #111 !important;
+    }
 
-    .status { margin-top:10px; font-size:0.95rem; min-height:1.2em; }
-    .status.ok { color:#137333; font-weight:700; }
-    .status.err { color:#b3261e; font-weight:600; }
+    header {
+      background: #0078ff;
+      color: #fff;
+      padding: 10px 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
 
-    .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    main {
+      padding: 14px;
+      max-width: 780px;
+      margin: 0 auto;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    label {
+      font-weight: 600;
+      margin-top: 10px;
+      display: block;
+    }
+
+    .required::after {
+      content: " *";
+      color: #c91c1c;
+    }
+
+    input, button {
+      width: 100%;
+      font-size: 1rem;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #c9d3e0;
+      box-sizing: border-box;
+      margin-top: 6px;
+      background: #fff !important;
+      color: #111 !important;
+      caret-color: #111 !important;
+    }
+
+    ::placeholder {
+      color: #666 !important;
+      opacity: 1 !important;
+    }
+
+    input:-webkit-autofill,
+    select:-webkit-autofill,
+    textarea:-webkit-autofill {
+      -webkit-text-fill-color: #111 !important;
+      box-shadow: 0 0 0 1000px #fff inset !important;
+      transition: background-color 9999s ease-out;
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.primary {
+      background: #0078ff;
+      color: #fff;
+      border: 2px solid #005fcc;
+      transition: background 0.25s, border 0.25s;
+    }
+    button.primary:hover {
+      background: #005fcc;
+      border-color: #004da3;
+    }
+
+    button.secondary {
+      background: #eef3f8;
+      color: #111;
+      border: 1px solid #c9d3e0;
+    }
+
+    input:disabled, button:disabled {
+      opacity: .6;
+      pointer-events: none;
+    }
+
+    #map {
+      height: 360px;
+      border-radius: 10px;
+      margin-top: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 0.95rem;
+      min-height: 1.2em;
+    }
+
+    .status.ok {
+      color: #137333;
+      font-weight: 700;
+    }
+
+    .status.err {
+      color: #b3261e;
+      font-weight: 600;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
 
     .icon-badge {
-      position:absolute; bottom:10px; z-index:600;
-      width:42px; height:42px; border-radius:50%;
-      background:rgba(255,255,255,0.95);
-      display:flex; align-items:center; justify-content:center;
-      box-shadow:0 2px 6px rgba(0,0,0,.25);
-      font-size:20px; border:1px solid #d8dee9;
-      user-select:none;
+      position: absolute;
+      bottom: 10px;
+      z-index: 600;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .25);
+      font-size: 20px;
+      border: 1px solid #d8dee9;
+      user-select: none;
+      color: #111;
     }
-    #wakeIcon { right:10px; pointer-events:none; }
-    #mapTypeIcon { left:10px; cursor:pointer; }
 
-    .wake-on { background:#e6ffea; border-color:#75d08a; }
-    .wake-off { background:rgba(255,255,255,0.95); border-color:#d8dee9; }
+    #wakeIcon {
+      right: 10px;
+      pointer-events: none;
+    }
 
-    /* Hide Leaflet attribution */
+    #mapTypeIcon {
+      left: 10px;
+      cursor: pointer;
+    }
+
+    .wake-on {
+      background: #e6ffea;
+      border-color: #75d08a;
+    }
+
+    .wake-off {
+      background: rgba(255, 255, 255, 0.95);
+      border-color: #d8dee9;
+    }
+
     .leaflet-control-attribution,
-    .leaflet-control-scale { display:none !important; }
+    .leaflet-control-scale {
+      display: none !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body, input, select, textarea, button {
+        color: #111 !important;
+        background: #fff !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -54,22 +188,22 @@
   <main>
     <div class="row">
       <div>
-        <label for="busId">Route <span style="color:#b3261e">*</span></label>
+        <label for="busId" class="required">Route</label>
         <input type="text" id="busId" placeholder="e.g. 201, 206, 305" />
       </div>
       <div>
-        <label for="destination">Destination <span style="color:#b3261e">*</span></label>
-        <input type="text" id="destination" placeholder="e.g. Kuantan" />
+        <label for="driver">Driver Name</label>
+        <input type="text" id="driver" placeholder="e.g. Najmi" />
       </div>
     </div>
 
     <div class="row">
       <div>
-        <label for="driver">Driver Name (optional)</label>
-        <input type="text" id="driver" placeholder="e.g. Najmi" />
+        <label for="destination" class="required">Destination</label>
+        <input type="text" id="destination" placeholder="e.g. Kuantan" />
       </div>
       <div>
-        <label for="plate">No. Plate (optional)</label>
+        <label for="plate">No. Plate</label>
         <input type="text" id="plate" placeholder="e.g. CEE 1234" />
       </div>
     </div>
@@ -89,78 +223,62 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    // --------- CONFIG ---------
     const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyuInv2pTegro2wfqdMOHX1-dUKq2SY98QpP-Cm5iqFEPmHPd8kHnYv0deGQknViQSM/exec";
     const TRAIL_MAX_POINTS = 1000;
     const POST_INTERVAL_MS = 5000;
 
-    // --------- DOM refs ---------
-    const routeEl = document.getElementById('busId');          // Route (required)
-    const destEl  = document.getElementById('destination');    // Destination (required)
-    const driverEl= document.getElementById('driver');         // optional
-    const plateEl = document.getElementById('plate');          // optional
+    const busIdEl = document.getElementById('busId');
+    const driverEl = document.getElementById('driver');
+    const destEl   = document.getElementById('destination');
+    const plateEl  = document.getElementById('plate');
     const statusDiv = document.getElementById('status');
     const btnAuto = document.getElementById('btnAuto');
     const btnClear = document.getElementById('btnClear');
     const wakeIcon = document.getElementById('wakeIcon');
     const mapTypeIcon = document.getElementById('mapTypeIcon');
 
-    // --------- Local storage helpers ---------
-    const LS_KEY = 'bus_sender_fields_v3';
+    const LS_KEY = 'bus_sender_fields_v2';
     function saveFields() {
       const d = {
-        route: routeEl.value.trim(),
-        dest: destEl.value.trim(),
+        busId: busIdEl.value.trim(),
         driver: driverEl.value.trim(),
+        dest: destEl.value.trim(),
         plate: plateEl.value.trim()
       };
       localStorage.setItem(LS_KEY, JSON.stringify(d));
-      validateRequired(); // re-check button enablement
+      checkRouteFilled();
     }
     function loadFields() {
       try {
         const d = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-        if (d.route) routeEl.value = d.route;
-        if (d.dest)  destEl.value  = d.dest;
+        if (d.busId) busIdEl.value = d.busId;
         if (d.driver) driverEl.value = d.driver;
-        if (d.plate)  plateEl.value  = d.plate;
-      } catch (_) {}
-    }
-    function clearFields() {
-      localStorage.removeItem(LS_KEY);
-      routeEl.value = '';
-      destEl.value = '';
-      driverEl.value = '';
-      plateEl.value = '';
-      validateRequired();
-      show('✅ Saved fields cleared');
+        if (d.dest) destEl.value = d.dest;
+        if (d.plate) plateEl.value = d.plate;
+      } catch {}
     }
 
-    [routeEl, destEl, driverEl, plateEl].forEach(el => el.addEventListener('input', saveFields));
+    [busIdEl, driverEl, destEl, plateEl].forEach(el => el.addEventListener('input', saveFields));
     loadFields();
 
-    // --------- Enable Start only if Route & Destination are filled ---------
-    function validateRequired() {
-      const ok = !!routeEl.value.trim() && !!destEl.value.trim();
-      btnAuto.disabled = !ok;
+    function checkRouteFilled() {
+      btnAuto.disabled = !(busIdEl.value.trim() && destEl.value.trim());
     }
-    validateRequired();
+    checkRouteFilled();
 
-    // --------- UI feedback ---------
-    function show(msg, ok = true) {
+    function showStatus(msg, ok=true) {
       statusDiv.textContent = msg;
       statusDiv.className = ok ? 'status ok' : 'status err';
     }
     function lockForm(lock) {
-      [routeEl, destEl, driverEl, plateEl, btnClear].forEach(e => e.disabled = lock);
+      [busIdEl, driverEl, destEl, plateEl, btnClear].forEach(e => e.disabled = lock);
     }
 
-    // --------- Map setup ---------
-    let map = L.map('map', { attributionControl:false }).setView([3.54, 103.43], 14);
+    const map = L.map('map', { attributionControl:false }).setView([3.54,103.43], 14);
     const layers = {
-      streets:   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'),
+      streets: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'),
       satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'),
-      osm:       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+      osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
     };
     const labelsOverlay = L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png', { opacity:0.9 });
     let baseKey='streets';
@@ -171,11 +289,10 @@
       baseKey=baseOrder[(baseOrder.indexOf(baseKey)+1)%baseOrder.length];
       layers[baseKey].addTo(map);
       if (!map.hasLayer(labelsOverlay)) labelsOverlay.addTo(map);
-      show('Map: '+baseKey);
+      showStatus('Map: '+baseKey);
     }
     mapTypeIcon.onclick=switchMapType;
 
-    // Clean bus icon (white circle)
     const busIcon = L.divIcon({
       html:`<div style="width:40px;height:40px;background:white;border-radius:50%;
                    display:flex;align-items:center;justify-content:center;
@@ -193,7 +310,6 @@
       trail.setLatLngs(pts);
     }
 
-    // --------- Speed / distance stats (km/h) ---------
     let watchId=null,lastPos=null,startTime=null,totalDist=0,lastPost=0;
     function haversine(a,b,c,d){const R=6371000,toRad=x=>x*Math.PI/180;const dLat=toRad(c-a),dLon=toRad(d-b);const x=Math.sin(dLat/2)**2+Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
     function updateStats(lat,lng,t){
@@ -201,46 +317,18 @@
       let inst=0;if(lastPos){const d=haversine(lastPos.lat,lastPos.lng,lat,lng);const dt=(t-lastPos.time)/1000;if(dt>0){inst=d/dt;totalDist+=d;}}
       lastPos={lat,lng,time:t};
       const elapsed=(t-startTime)/1000;const avg=(elapsed>0?totalDist/elapsed:0);
-      show(`🚍 ${(inst*3.6).toFixed(1)} km/h | Avg ${(avg*3.6).toFixed(1)} | Dist ${(totalDist/1000).toFixed(2)} km`);
+      showStatus(`🚍 ${(inst*3.6).toFixed(1)} km/h | Avg ${(avg*3.6).toFixed(1)} | Dist ${(totalDist/1000).toFixed(2)} km`);
       return inst;
     }
 
-    // --------- Networking ---------
-    async function postUpdate(lat, lng, speed) {
-      const payload = {
-        busId: routeEl.value.trim(),
-        timestamp: new Date().toISOString(),
-        lat, lng,
-        destination: destEl.value.trim(),
-        driver: driverEl.value.trim(),   // optional (can be empty)
-        plate: plateEl.value.trim(),     // optional (can be empty)
-        speed_mps: Number(speed || 0)
-      };
-
-      if (!payload.busId || !payload.destination) {
-        // Button is already disabled if missing; this is just a guard.
-        return show('❌ Route & Destination are required', false);
-      }
-
-      try {
-        // IMPORTANT: text/plain avoids preflight (OPTIONS) to Apps Script
-        const res = await fetch(WEB_APP_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (data.ok) {
-          // success: no extra toast (status already shows speed/avg/dist live)
-        } else {
-          show('❌ Error: ' + (data.error || 'Unknown'), false);
-        }
-      } catch (e) {
-        show('❌ Network error: ' + e.message, false);
-      }
+    async function postUpdate(lat,lng,speed){
+      const payload={busId:busIdEl.value.trim(),driver:driverEl.value.trim(),destination:destEl.value.trim(),plate:plateEl.value.trim(),lat,lng,speed_mps:speed||0,timestamp:new Date().toISOString()};
+      if(!payload.busId)return showStatus('Please fill Route',false);
+      if(!payload.destination)return showStatus('Please fill Destination',false);
+      try{await fetch(WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});}
+      catch(e){showStatus('Network error: '+e.message,false);}
     }
 
-    // --------- Wake Lock ---------
     let wakeLock=null;
     async function acquireWake(){
       try{
@@ -250,56 +338,43 @@
       }catch{}
     }
     async function releaseWake(){
-      if(wakeLock){ try{ await wakeLock.release(); }catch{} wakeLock=null; }
+      if(wakeLock){try{await wakeLock.release();}catch{} wakeLock=null;}
       wakeIcon.classList.remove('wake-on'); wakeIcon.textContent='💡';
     }
 
-    // --------- Start/Stop Auto Update ---------
     btnAuto.onclick=async()=>{
-      // If disabled, do nothing (guard)
-      if (btnAuto.disabled) return;
-
       if(watchId){
         navigator.geolocation.clearWatch(watchId);
         watchId=null;
         await releaseWake();
         btnAuto.textContent='▶️ Start Auto Update';
         lockForm(false);
-        show('⏸️ Auto update stopped');
+        showStatus('Tracking stopped');
         return;
       }
-      if(!navigator.geolocation) return show('❌ Geolocation not supported', false);
-
-      // guard: require route + destination (should already be true)
-      if (!routeEl.value.trim() || !destEl.value.trim()) {
-        return show('❌ Fill Route & Destination first', false);
-      }
-
-      lastPos=null;startTime=null;totalDist=0;lastPost=0;trail.setLatLngs([]);
-      lockForm(true);
+      if(!navigator.geolocation)return showStatus('❌ Geolocation not supported',false);
+      lastPos=null;startTime=null;totalDist=0;lastPost=0;trail.setLatLngs([]);lockForm(true);
       btnAuto.textContent='🛑 Stop Auto Update';
-      show('▶️ Auto update started');
+      showStatus('Tracking started');
       await acquireWake();
 
       watchId=navigator.geolocation.watchPosition(pos=>{
-        const { latitude, longitude } = pos.coords;
-        const now=pos.timestamp || Date.now();
-        marker.setLatLng([latitude, longitude]);
-        updateTrail(latitude, longitude);
-        map.setView([latitude, longitude], map.getZoom());
-        const spd=updateStats(latitude, longitude, now);
-        if(!lastPost || (Date.now()-lastPost)>=POST_INTERVAL_MS){
+        const{latitude,longitude}=pos.coords;
+        const now=pos.timestamp||Date.now();
+        marker.setLatLng([latitude,longitude]);
+        updateTrail(latitude,longitude);
+        map.setView([latitude,longitude]);
+        const spd=updateStats(latitude,longitude,now);
+        if(!lastPost||(Date.now()-lastPost)>=POST_INTERVAL_MS){
           lastPost=Date.now();
-          postUpdate(latitude, longitude, spd);
+          postUpdate(latitude,longitude,spd);
         }
-      }, err=>show('❌ ' + err.message, false), { enableHighAccuracy: true, maximumAge: 1000 });
+      },err=>showStatus('GPS error: '+err.message,false),{enableHighAccuracy:true,maximumAge:1000});
 
       saveFields();
     };
 
-    // --------- Clear saved ---------
-    btnClear.onclick = () => { clearFields(); };
-
+    btnClear.onclick=()=>{localStorage.removeItem(LS_KEY);showStatus('Saved fields cleared');checkRouteFilled();};
   </script>
 </body>
 </html>
